@@ -23,6 +23,8 @@ import {
 } from "./data";
 
 const KEY = "beta.state.v1";
+// Bump this whenever a migration is needed to fix saved profile data.
+const PROFILE_SCHEMA_VERSION = 1;
 
 interface AppState {
   profile: StudentProfile;
@@ -30,6 +32,7 @@ interface AppState {
   activity: Record<string, SchoolActivity>;
   readiness: PortfolioReadiness;
   onboarded: boolean;
+  profileSchemaVersion?: number;
 }
 
 function blankActivity(collegeId: string): SchoolActivity {
@@ -60,12 +63,26 @@ function seedState(): AppState {
   };
 }
 
+// Merges a stored profile with the current DEFAULT_PROFILE shape so that new
+// optional fields are always present, and clears interests that were never
+// user-entered (they came from the old DEFAULT_PROFILE demo values).
+function migrateState(raw: AppState): AppState {
+  const isPreMigration = !raw.profileSchemaVersion;
+  const profile: StudentProfile = { ...DEFAULT_PROFILE, ...raw.profile };
+  if (isPreMigration) {
+    // Before v1, interests were seeded from DEFAULT_PROFILE ("Film",
+    // "Creative Writing", "Entrepreneurship") — never entered by the user.
+    profile.interests = [];
+  }
+  return { ...raw, profile, profileSchemaVersion: PROFILE_SCHEMA_VERSION };
+}
+
 export function loadState(): AppState {
   if (typeof window === "undefined") return seedState();
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return seedState();
-    return JSON.parse(raw) as AppState;
+    return migrateState(JSON.parse(raw) as AppState);
   } catch {
     return seedState();
   }

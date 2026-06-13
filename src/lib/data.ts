@@ -12,15 +12,52 @@ export type Setting = "urban" | "suburban" | "rural";
 
 export interface StudentProfile {
   name: string;
-  gpa: number; // unweighted 0-4
-  sat: number | null; // 400-1600, null = test optional / not submitting
-  rigor: number; // 0-1, how demanding the course load (AP/IB count proxy)
-  // Survey "would you rather" preferences, each 0-1
-  prefLargeSchool: number; // 1 = wants big, 0 = wants small
-  prefUrban: number; // 1 = city, 0 = rural
-  prefBreadth: number; // 1 = explore many fields, 0 = one focused major
-  prefVibeIntense: number; // 1 = intense/preprofessional, 0 = collaborative/laid-back
-  interests: string[];
+
+  // ── Academic ──────────────────────────────────────────────────────────────
+  gpa: number;              // unweighted 0–4
+  sat: number | null;       // 400–1600, null = test-optional / not submitting
+  act?: number | null;      // 1–36, null = not submitting
+  rigor: number;            // 0–1 course-load intensity
+  apCount?: number;         // total AP/IB/dual-enrollment courses taken or planned
+  strongestSubjects?: string[];
+
+  // ── Major & Career ────────────────────────────────────────────────────────
+  interests: string[];           // broad academic/extracurricular interests
+  majorInterests?: string[];     // declared or leaning majors (ordered by preference)
+  undecided?: boolean;           // true = actively exploring, no declared major
+  careerInterests?: string[];
+  majorFlexibility?: number;     // 0 = locked in, 1 = very open to switching
+  interdisciplinaryInterest?: number; // 0 = single dept, 1 = loves crossing fields
+
+  // ── Cost & Aid ────────────────────────────────────────────────────────────
+  maxYearlyBudget?: number | null;  // null = not entered; USD/year
+  needAid?: boolean | null;         // null = not answered
+  meritImportant?: boolean | null;
+  loanSensitivity?: number;         // 0 = ok with loans, 1 = avoid at all costs
+
+  // ── Location ─────────────────────────────────────────────────────────────
+  preferredRegions?: string[];      // e.g. ["Northeast", "West Coast"]
+  maxDistanceFromHome?: string;     // "< 2 hours" | "2–5 hours" | "anywhere"
+  climatePreference?: string;       // "warm" | "cold" | "four seasons" | "no preference"
+  nearIndustry?: string[];          // ["tech", "healthcare", "arts", "finance", ...]
+
+  // ── Campus preferences (existing 0–1 sliders kept for beta compat) ───────
+  prefLargeSchool: number;   // 0 = small, 1 = large
+  prefUrban: number;         // 0 = rural, 1 = urban/city
+  prefBreadth: number;       // 0 = focused major, 1 = explore many fields
+  prefVibeIntense: number;   // 0 = collaborative/laid-back, 1 = intense/pre-professional
+  greekLifePref?: number;    // 0 = avoid, 0.5 = neutral, 1 = important
+  sportsImportance?: number; // 0 = irrelevant, 1 = big sports school matters
+
+  // ── Learning environment ─────────────────────────────────────────────────
+  seminarVsLecture?: number;          // 0 = small seminars, 1 = large lectures ok
+  facultyAccessImportance?: number;   // 0 = doesn't matter, 1 = open-door profs essential
+  researchInterest?: number;          // 0 = not interested, 1 = core priority
+  internshipImportance?: number;      // 0 = not a factor, 1 = must have strong pipeline
+  studyAbroadInterest?: number;       // 0 = not interested, 1 = very important
+
+  // ── Application strategy ─────────────────────────────────────────────────
+  edEaWillingness?: boolean;
 }
 
 export interface College {
@@ -36,6 +73,8 @@ export interface College {
   breadth: number; // 0-1, how flexible/generalist the curriculum is
   vibeIntense: number; // 0-1
   strengths: string[]; // academic strengths, used for fit + "values"
+  type?: "public" | "private";
+  tuition?: number;      // approximate sticker price per year (USD)
   // Agent-sourced, double-verified fields (Claude run + Exa cross-check)
   values?: string;
   whyEssayAngle?: string;
@@ -76,6 +115,8 @@ export const SEED_COLLEGES: College[] = [
     breadth: 0.85,
     vibeIntense: 0.6,
     strengths: ["Film", "CS", "Biology", "Public Health"],
+    type: "public",
+    tuition: 44000,
   },
   {
     id: "usc",
@@ -90,6 +131,8 @@ export const SEED_COLLEGES: College[] = [
     breadth: 0.8,
     vibeIntense: 0.7,
     strengths: ["Film", "Business", "Engineering", "Communications"],
+    type: "private",
+    tuition: 68000,
   },
   {
     id: "skidmore",
@@ -104,6 +147,8 @@ export const SEED_COLLEGES: College[] = [
     breadth: 0.95,
     vibeIntense: 0.3,
     strengths: ["Studio Art", "Liberal Arts", "Business", "Environmental Studies"],
+    type: "private",
+    tuition: 65000,
   },
   {
     id: "hamilton",
@@ -118,17 +163,23 @@ export const SEED_COLLEGES: College[] = [
     breadth: 0.97,
     vibeIntense: 0.45,
     strengths: ["Open Curriculum", "Writing", "Economics", "Government"],
+    type: "private",
+    tuition: 67000,
   },
 ];
 
+// DEFAULT_PROFILE is the blank starting point for new users.
+// All numeric sliders sit at the neutral midpoint (0.5) so no preference
+// signals fire until the student completes the survey.
+// Do NOT add fake interests/majors here — use only values a user would enter.
 export const DEFAULT_PROFILE: StudentProfile = {
-  name: "You",
-  gpa: 3.82,
-  sat: 1410,
-  rigor: 0.75,
-  prefLargeSchool: 0.55,
-  prefUrban: 0.7,
-  prefBreadth: 0.85,
+  name: "",
+  gpa: 3.5,
+  sat: null,
+  rigor: 0.5,
+  prefLargeSchool: 0.5,
+  prefUrban: 0.5,
+  prefBreadth: 0.5,
   prefVibeIntense: 0.5,
-  interests: ["Film", "Creative Writing", "Entrepreneurship"],
+  interests: [],
 };
