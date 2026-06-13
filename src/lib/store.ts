@@ -25,6 +25,8 @@ import {
 import { DEFAULT_RISK, type RiskSettings } from "./recommend";
 
 const KEY = "beta.state.v1";
+// Bump this whenever a migration is needed to fix saved profile data.
+const PROFILE_SCHEMA_VERSION = 1;
 
 interface AppState {
   profile: StudentProfile;
@@ -32,6 +34,7 @@ interface AppState {
   activity: Record<string, SchoolActivity>;
   readiness: PortfolioReadiness;
   onboarded: boolean;
+  profileSchemaVersion?: number;
   // --- [Luke] portfolio recs ---
   portfolioIds: string[]; // the confirmed "true" portfolio (subset of colleges)
   risk: RiskSettings; // risk appetite + target portfolio size
@@ -62,10 +65,25 @@ function seedState(): AppState {
     activity,
     readiness: { commonAppDone: false, testsSubmitted: true, recsRequested: true, fafsaDone: false },
     onboarded: false,
+    profileSchemaVersion: PROFILE_SCHEMA_VERSION,
     // --- [Luke] portfolio recs ---
     portfolioIds: SEED_COLLEGES.map((c) => c.id), // seeds start confirmed
     risk: DEFAULT_RISK,
   };
+}
+
+// Merges a stored profile with the current DEFAULT_PROFILE shape so that new
+// optional fields are always present, and clears interests that were never
+// user-entered (they came from the old DEFAULT_PROFILE demo values).
+function migrateState(raw: AppState): AppState {
+  const isPreMigration = !raw.profileSchemaVersion;
+  const profile: StudentProfile = { ...DEFAULT_PROFILE, ...raw.profile };
+  if (isPreMigration) {
+    // Before v1, interests were seeded from DEFAULT_PROFILE ("Film",
+    // "Creative Writing", "Entrepreneurship") — never entered by the user.
+    profile.interests = [];
+  }
+  return { ...raw, profile, profileSchemaVersion: PROFILE_SCHEMA_VERSION };
 }
 
 export function loadState(): AppState {
@@ -74,16 +92,15 @@ export function loadState(): AppState {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return seedState();
     const parsed = JSON.parse(raw) as Partial<AppState>;
-    // --- [Luke] portfolio recs ---
+    const seed = seedState();
     // Backfill fields added after a user's state was first persisted, so older
     // localStorage doesn't render a blank/broken dashboard.
-    const seed = seedState();
-    return {
+    return migrateState({
       ...seed,
       ...parsed,
       portfolioIds: parsed.portfolioIds ?? (parsed.colleges ?? seed.colleges).map((c) => c.id),
       risk: { ...seed.risk, ...(parsed.risk ?? {}) },
-    } as AppState;
+    } as AppState);
   } catch {
     return seedState();
   }
