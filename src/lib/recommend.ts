@@ -41,6 +41,26 @@ const sizeBracket = (size: number): "small" | "mid" | "large" =>
   size < 5000 ? "small" : size <= 20000 ? "mid" : "large";
 
 /**
+ * Risk-appetite priority (0..1) — how much THIS school deserves attention given
+ * the student's current risk dial. The single lever that makes the whole app
+ * react to risk appetite:
+ *   - conservative dial  → low-β anchors score highest
+ *   - ambitious dial     → high-β reaches score highest, but only when fit is real
+ * Used both to rank recommendations and to prioritize the confirmed portfolio.
+ */
+export function riskPriority(beta: number, fit: number, tolerance: number): number {
+  const nBeta = clamp(beta / 2.5, 0, 1); // most β live in 0..2.5; high = riskier
+  const conservativePref = 1 - nBeta;
+  const ambitiousPref = nBeta * fit;
+  return (1 - tolerance) * conservativePref + tolerance * ambitiousPref;
+}
+
+/** Bucketed label for the priority score, for compact UI badges. */
+export function priorityLabel(p: number): "High" | "Medium" | "Low" {
+  return p >= 0.6 ? "High" : p >= 0.35 ? "Medium" : "Low";
+}
+
+/**
  * Rank every candidate (universe minus confirmed) for this student + risk
  * appetite. Returns highest-scoring first.
  */
@@ -67,15 +87,9 @@ export function recommend(
       const result = computeBeta(college, profile);
       const { beta, fit } = result;
 
-      // Normalize β onto 0..1 (most live in 0..2.5); high = riskier.
-      const nBeta = clamp(beta / 2.5, 0, 1);
-
       // Conservative students value low β; ambitious students value high-β
       // reaches *only when the fit is real* (keeps "Reconsider" junk down).
-      const conservativePref = 1 - nBeta;
-      const ambitiousPref = nBeta * fit;
-      const riskScore =
-        (1 - risk.tolerance) * conservativePref + risk.tolerance * ambitiousPref;
+      const riskScore = riskPriority(beta, fit, risk.tolerance);
 
       // Discovery candidate: a great fit, comparably selective to their list,
       // but bringing a setting AND size they don't already hold → genuinely

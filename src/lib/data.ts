@@ -10,6 +10,17 @@
 
 export type Setting = "urban" | "suburban" | "rural";
 
+// Rich "school culture" profile — hand-authored for seed schools, or produced
+// by the sourcing agent (api/source-college) for any school the student adds.
+export interface SchoolCulture {
+  whatTheyValue: string[];
+  classesStudentsLove: string[];
+  vibe: string;
+  traditions: string[];
+  opportunities: string[];
+  watchOut: string;
+}
+
 export interface StudentProfile {
   name: string;
 
@@ -80,6 +91,7 @@ export interface College {
   whyEssayAngle?: string;
   tourUrl?: string;
   verified?: boolean;
+  culture?: SchoolCulture; // agent-enriched school-culture profile
 }
 
 export interface SchoolActivity {

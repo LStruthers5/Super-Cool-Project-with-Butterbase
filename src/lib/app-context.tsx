@@ -1,7 +1,8 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { loadState, saveState, resetState, blankActivity, type AppState } from "./store";
+import { loadState, saveState, resetState, blankActivity, getUserId, syncFromBB, syncToBB, type AppState } from "./store";
+import { rememberProfile } from "./evermind";
 import type { College, SchoolActivity, StudentProfile, PortfolioReadiness } from "./data";
 // --- [Luke] portfolio recs ---
 import type { RiskSettings } from "./recommend";
@@ -25,14 +26,32 @@ const AppCtx = createContext<Ctx | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState | null>(null);
 
-  useEffect(() => setState(loadState()), []);
+  // Load from localStorage immediately (instant), then merge from Butterbase in background
   useEffect(() => {
-    if (state) saveState(state);
+    const local = loadState();
+    setState(local);
+    const userId = getUserId();
+    syncFromBB(userId).then((remote) => {
+      if (remote) {
+        setState((cur) => cur ? { ...cur, ...remote } : cur);
+      }
+    });
+  }, []);
+
+  // Persist to localStorage on every state change, and sync to Butterbase
+  useEffect(() => {
+    if (!state) return;
+    saveState(state);
+    const userId = getUserId();
+    syncToBB(userId, state);
   }, [state]);
 
   const ctx: Ctx = {
     state,
-    setProfile: (p) => setState((s) => (s ? { ...s, profile: p } : s)),
+    setProfile: (p) => {
+      setState((s) => (s ? { ...s, profile: p } : s));
+      rememberProfile(getUserId(), p as unknown as Record<string, unknown>);
+    },
     setOnboarded: (v) => setState((s) => (s ? { ...s, onboarded: v } : s)),
     toggleActivity: (collegeId, key) =>
       setState((s) => {

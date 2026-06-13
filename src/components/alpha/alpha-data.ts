@@ -35,19 +35,18 @@ export interface AlphaLead {
 
 export interface KindMeta {
   label: string;
-  icon: string;
-  /** tailwind text + soft-bg pair from the project palette */
+  /** tailwind text color + dot bg color from the project palette */
   text: string;
-  bg: string;
+  dot: string;
 }
 
 export const KIND_META: Record<AlphaLeadKind, KindMeta> = {
-  deadline: { label: "Deadline", icon: "⏰", text: "text-risk", bg: "bg-risksoft" },
-  scholarship: { label: "Scholarship", icon: "💰", text: "text-fit", bg: "bg-fitsoft" },
-  essay: { label: "Essay angle", icon: "✍️", text: "text-ink", bg: "bg-slatebg" },
-  visit: { label: "Visit", icon: "📍", text: "text-amber", bg: "bg-slatebg" },
-  insight: { label: "Insight", icon: "💡", text: "text-fit", bg: "bg-fitsoft" },
-  connection: { label: "Connection", icon: "🤝", text: "text-ink", bg: "bg-slatebg" },
+  deadline:   { label: "Deadline",    text: "text-risk",  dot: "bg-risk"  },
+  scholarship:{ label: "Scholarship", text: "text-fit",   dot: "bg-fit"   },
+  essay:      { label: "Essay angle", text: "text-ink",   dot: "bg-ink/40"},
+  visit:      { label: "Visit",       text: "text-amber", dot: "bg-amber" },
+  insight:    { label: "Insight",     text: "text-fit",   dot: "bg-fit"   },
+  connection: { label: "Connection",  text: "text-ink",   dot: "bg-ink/40"},
 };
 
 export const SEED_ALPHA_LEADS: AlphaLead[] = [
