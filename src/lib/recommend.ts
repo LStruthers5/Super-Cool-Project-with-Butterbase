@@ -24,6 +24,8 @@ export interface RiskSettings {
 export const DEFAULT_RISK: RiskSettings = { tolerance: 0.5, targetCount: 8 };
 export const MIN_SCHOOLS = 6;
 export const MAX_SCHOOLS = 14;
+// Keep "off your radar" a genuine highlight, not a label on everything.
+const MAX_DISCOVERY = 2;
 
 export interface Recommendation {
   college: College;
@@ -58,11 +60,12 @@ export function recommend(
   const settingsHeld = new Set(confirmed.map((c) => c.setting));
   const bracketsHeld = new Set(confirmed.map((c) => sizeBracket(c.size)));
 
-  const recs = universe
+  type Scored = Recommendation & { eligible: boolean };
+  const scored = universe
     .filter((c) => !confirmedSet.has(c.id))
-    .map<Recommendation>((college) => {
+    .map<Scored>((college) => {
       const result = computeBeta(college, profile);
-      const { beta, fit, bucket } = result;
+      const { beta, fit } = result;
 
       // Normalize β onto 0..1 (most live in 0..2.5); high = riskier.
       const nBeta = clamp(beta / 2.5, 0, 1);
@@ -74,21 +77,30 @@ export function recommend(
       const riskScore =
         (1 - risk.tolerance) * conservativePref + risk.tolerance * ambitiousPref;
 
-      // Discovery: comparably selective to their list, fits well, but a
-      // setting/size they don't already hold → broadens the portfolio.
+      // Discovery candidate: a great fit, comparably selective to their list,
+      // but bringing a setting AND size they don't already hold → genuinely
+      // broadens the portfolio. We only *flag* the best couple (below).
       const selectivity = 1 - college.acceptanceRate;
-      const impressive = fit >= 0.6 && selectivity >= avgSelectivity - 0.08;
-      const novel = !settingsHeld.has(college.setting) || !bracketsHeld.has(sizeBracket(college.size));
-      const discovery = impressive && novel && confirmed.length > 0;
+      const impressive = fit >= 0.7 && selectivity >= avgSelectivity - 0.05;
+      // "Off radar" = a size/type they're under-exposed to, or a setting they
+      // don't hold at all. Either makes it something they likely overlooked.
+      const novel = !bracketsHeld.has(sizeBracket(college.size)) || !settingsHeld.has(college.setting);
+      const eligible = impressive && novel && confirmed.length > 0;
 
-      // Fit anchors the score; risk appetite tilts it; discovery nudges.
-      const score = 0.58 * fit + 0.32 * riskScore + (discovery ? 0.1 : 0);
-
-      return { college, result, score, why: reason(bucket, fit, discovery), discovery };
+      const score = 0.58 * fit + 0.32 * riskScore + (eligible ? 0.06 : 0);
+      return { college, result, score, eligible, discovery: false, why: "" };
     })
     .sort((a, b) => b.score - a.score);
 
-  return recs;
+  // Promote only the top few eligible candidates to true "discovery" picks.
+  let promoted = 0;
+  for (const r of scored) {
+    r.discovery = r.eligible && promoted < MAX_DISCOVERY;
+    if (r.discovery) promoted++;
+    r.why = reason(r.result.bucket, r.result.fit, r.discovery);
+  }
+
+  return scored.map(({ eligible, ...rec }) => rec);
 }
 
 function reason(bucket: BetaResult["bucket"], fit: number, discovery: boolean): string {
