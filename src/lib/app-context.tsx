@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { loadState, saveState, resetState, blankActivity, type AppState } from "./store";
 import type { College, SchoolActivity, StudentProfile, PortfolioReadiness } from "./data";
+// --- [Luke] portfolio recs ---
+import type { RiskSettings } from "./recommend";
 
 interface Ctx {
   state: AppState | null;
@@ -12,6 +14,10 @@ interface Ctx {
   toggleReadiness: (key: keyof PortfolioReadiness) => void;
   upsertCollege: (c: College) => void;
   reset: () => void;
+  // --- [Luke] portfolio recs ---
+  confirmToPortfolio: (c: College) => void;
+  removeFromPortfolio: (id: string) => void;
+  setRisk: (patch: Partial<RiskSettings>) => void;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -48,6 +54,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       resetState();
       setState(loadState());
     },
+    // --- [Luke] portfolio recs ---
+    confirmToPortfolio: (c) =>
+      setState((s) => {
+        if (!s) return s;
+        // Mirror upsertCollege so the college page can resolve this id, then
+        // mark it confirmed in the true portfolio.
+        const exists = s.colleges.some((x) => x.id === c.id);
+        const colleges = exists ? s.colleges.map((x) => (x.id === c.id ? c : x)) : [...s.colleges, c];
+        const activity = s.activity[c.id] ? s.activity : { ...s.activity, [c.id]: blankActivity(c.id) };
+        const portfolioIds = s.portfolioIds.includes(c.id) ? s.portfolioIds : [...s.portfolioIds, c.id];
+        return { ...s, colleges, activity, portfolioIds };
+      }),
+    removeFromPortfolio: (id) =>
+      setState((s) =>
+        s ? { ...s, portfolioIds: s.portfolioIds.filter((x) => x !== id) } : s
+      ),
+    setRisk: (patch) =>
+      setState((s) => (s ? { ...s, risk: { ...s.risk, ...patch } } : s)),
   };
 
   return <AppCtx.Provider value={ctx}>{children}</AppCtx.Provider>;

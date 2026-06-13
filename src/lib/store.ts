@@ -21,6 +21,8 @@ import {
   type SchoolActivity,
   type PortfolioReadiness,
 } from "./data";
+// --- [Luke] portfolio recs ---
+import { DEFAULT_RISK, type RiskSettings } from "./recommend";
 
 const KEY = "beta.state.v1";
 // Bump this whenever a migration is needed to fix saved profile data.
@@ -33,6 +35,9 @@ interface AppState {
   readiness: PortfolioReadiness;
   onboarded: boolean;
   profileSchemaVersion?: number;
+  // --- [Luke] portfolio recs ---
+  portfolioIds: string[]; // the confirmed "true" portfolio (subset of colleges)
+  risk: RiskSettings; // risk appetite + target portfolio size
 }
 
 function blankActivity(collegeId: string): SchoolActivity {
@@ -60,6 +65,10 @@ function seedState(): AppState {
     activity,
     readiness: { commonAppDone: false, testsSubmitted: true, recsRequested: true, fafsaDone: false },
     onboarded: false,
+    profileSchemaVersion: PROFILE_SCHEMA_VERSION,
+    // --- [Luke] portfolio recs ---
+    portfolioIds: SEED_COLLEGES.map((c) => c.id), // seeds start confirmed
+    risk: DEFAULT_RISK,
   };
 }
 
@@ -82,7 +91,16 @@ export function loadState(): AppState {
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return seedState();
-    return migrateState(JSON.parse(raw) as AppState);
+    const parsed = JSON.parse(raw) as Partial<AppState>;
+    const seed = seedState();
+    // Backfill fields added after a user's state was first persisted, so older
+    // localStorage doesn't render a blank/broken dashboard.
+    return migrateState({
+      ...seed,
+      ...parsed,
+      portfolioIds: parsed.portfolioIds ?? (parsed.colleges ?? seed.colleges).map((c) => c.id),
+      risk: { ...seed.risk, ...(parsed.risk ?? {}) },
+    } as AppState);
   } catch {
     return seedState();
   }
