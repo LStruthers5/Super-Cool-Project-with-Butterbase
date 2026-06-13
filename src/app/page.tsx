@@ -18,14 +18,49 @@ import { EnrichmentBar } from "@/components/EnrichmentBar";
 import { RiskControls } from "@/components/RiskControls";
 import { RecommendationCard } from "@/components/RecommendationCard";
 import { SchoolSearch } from "@/components/SchoolSearch";
+import { AlphaInbox } from "@/components/alpha/AlphaInbox";
+import {
+  SEED_ALPHA_LEADS,
+  totalAlphaImpact,
+  type AlphaLead,
+  type AlphaLeadStatus,
+} from "@/components/alpha/alpha-data";
 
 type SortKey = "beta" | "enrichment" | "fit";
 
 const MAX_RECS = 8;
 
+// Application-strength levels — the gamified spine of the dashboard.
+const LEVELS = [
+  { min: 0, name: "Explorer" },
+  { min: 20, name: "Researcher" },
+  { min: 40, name: "Strategist" },
+  { min: 60, name: "Contender" },
+  { min: 80, name: "Front-runner" },
+];
+
+function levelFor(strength: number) {
+  let idx = 0;
+  for (let i = 0; i < LEVELS.length; i++) if (strength >= LEVELS[i].min) idx = i;
+  const cur = LEVELS[idx];
+  const next = LEVELS[idx + 1];
+  const span = (next ? next.min : 100) - cur.min;
+  const into = strength - cur.min;
+  const pct = Math.round((into / span) * 100);
+  return { level: idx + 1, name: cur.name, pct: Math.min(100, pct), next: next?.name };
+}
+
 export default function Dashboard() {
   const { state, toggleReadiness, confirmToPortfolio, removeFromPortfolio, setRisk } = useApp();
   const [sort, setSort] = useState<SortKey>("beta");
+
+  // Alpha Leads live in local UI state (frontend-only until Codex's backend
+  // feeds them). Progress + next-actions derive from these.
+  const [leads, setLeads] = useState<AlphaLead[]>(SEED_ALPHA_LEADS);
+  const setLeadStatus = (id: string, status: AlphaLeadStatus) =>
+    setLeads((ls) => ls.map((l) => (l.id === id ? { ...l, status } : l)));
+  const convertedPoints = leads.filter((l) => l.status === "converted").reduce((s, l) => s + l.impact, 0);
+  const acceptedLeads = leads.filter((l) => l.status === "accepted");
 
   const universe = useMemo(() => (state ? getUniverse(state.colleges) : []), [state]);
 
@@ -74,6 +109,36 @@ export default function Dashboard() {
   const buildBalanced = () => balancedStarter(recs, state.risk.targetCount).forEach((r) => confirmToPortfolio(r.college));
   const gap = state.risk.targetCount - rows.length;
 
+  // Application Strength = the gamified composite: how ready your set is,
+  // how much Alpha upside you've captured, and how close to your target size.
+  const alphaPct = (convertedPoints / Math.max(1, totalAlphaImpact(leads))) * 100;
+  const coveragePct = Math.min(1, rows.length / Math.max(1, state.risk.targetCount)) * 100;
+  const strength = Math.round(0.6 * portfolio + 0.25 * alphaPct + 0.15 * coveragePct);
+  const lvl = levelFor(strength);
+
+  // Next best actions: highest-impact things to do right now.
+  const nextActions = [
+    ...acceptedLeads.map((l) => ({
+      id: l.id,
+      label: l.title,
+      context: l.school ? `Alpha · ${l.school}` : "Alpha",
+      impact: l.impact,
+      do: () => setLeadStatus(l.id, "converted"),
+      doLabel: "Mark done",
+    })),
+    ...sorted
+      .filter((r) => r.enr < 100)
+      .map((r) => ({
+        id: `school-${r.college.id}`,
+        label: r.next,
+        context: `β · ${r.college.short}`,
+        impact: Math.max(4, Math.round((100 - r.enr) / 8)),
+        href: `/college/${r.college.id}`,
+      })),
+  ]
+    .sort((a, b) => b.impact - a.impact)
+    .slice(0, 4);
+
   return (
     <div className="px-8 py-7 max-w-5xl">
       {/* Header */}
@@ -113,13 +178,41 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Portfolio enrichment bar */}
-      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-8">
+      {/* Application Strength — gamified hero */}
+      <div className="rounded-2xl border border-hair bg-ink text-white shadow-card p-5 mb-5">
+        <div className="flex items-end justify-between gap-4 flex-wrap mb-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-widest text-white/50 font-semibold">Application strength</p>
+            <div className="flex items-baseline gap-2">
+              <span className="font-display text-3xl font-bold">Lvl {lvl.level}</span>
+              <span className="font-display text-lg font-semibold text-fit">{lvl.name}</span>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="font-mono text-3xl font-bold tabular leading-none">{strength}</div>
+            <div className="text-[11px] text-white/50">/ 100 overall</div>
+          </div>
+        </div>
+        {/* XP bar to next level */}
+        <div className="relative w-full h-3 rounded-full bg-white/15 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-fit transition-[width] duration-700 ease-out"
+            style={{ width: `${lvl.pct}%` }}
+          />
+        </div>
+        <p className="text-[11px] text-white/60 mt-1.5">
+          {lvl.next ? `${lvl.pct}% to ${lvl.next}` : "Maxed out — front-runner status."} · capture Alpha leads and
+          de-risk schools to level up.
+        </p>
+      </div>
+
+      {/* Readiness checklist */}
+      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-5">
         <div className="flex items-center justify-between mb-2">
           <span className="font-display font-semibold">Portfolio readiness</span>
           <span className="text-xs text-muted">how de-risked your whole set is</span>
         </div>
-        <EnrichmentBar value={portfolio} height={32} />
+        <EnrichmentBar value={portfolio} height={28} />
         <div className="flex flex-wrap gap-3 mt-4">
           {(
             [
@@ -143,6 +236,49 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Next best actions */}
+      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-5">
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-display font-semibold">Next best actions</span>
+          <span className="text-xs text-muted">highest-impact moves right now</span>
+        </div>
+        {nextActions.length === 0 ? (
+          <p className="text-sm text-muted">You&apos;re all caught up. Source more Alpha leads to keep climbing.</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {nextActions.map((a) => (
+              <div key={a.id} className="flex items-center gap-3 rounded-xl border border-hair px-3 py-2.5">
+                <span className="font-mono text-xs font-bold text-fit tabular shrink-0">+{a.impact}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold truncate">{a.label}</p>
+                  <p className="text-[11px] text-muted">{a.context}</p>
+                </div>
+                {"do" in a && a.do ? (
+                  <button
+                    onClick={a.do}
+                    className="shrink-0 rounded-lg bg-fit text-white px-3 py-1 text-xs font-semibold hover:opacity-90 transition-colors"
+                  >
+                    {a.doLabel}
+                  </button>
+                ) : (
+                  <Link
+                    href={(a as { href: string }).href}
+                    className="shrink-0 rounded-lg border border-ink text-ink px-3 py-1 text-xs font-semibold hover:bg-ink hover:text-white transition-colors"
+                  >
+                    Open
+                  </Link>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Alpha Inbox */}
+      <div className="mb-8">
+        <AlphaInbox leads={leads} onSetStatus={setLeadStatus} />
       </div>
 
       {/* Confirmed school rows */}
