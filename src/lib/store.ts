@@ -1,16 +1,14 @@
 // ---------------------------------------------------------------------------
-// Butterbase seam.
+// Persistence layer — localStorage as primary cache, Butterbase as the
+// durable backend.
 //
-// Today the app persists to localStorage so it runs with zero backend during
-// the demo. To go live: point these functions at your Butterbase tables/MCP.
-// The UI imports ONLY from here, so swapping is a one-file change.
+// Pattern:
+//   loadState()       → synchronous read from localStorage (instant)
+//   syncFromBB()      → async read from Butterbase (called on mount to merge)
+//   saveState(s)      → synchronous write to localStorage
+//   syncToBB(userId,s)→ async fire-and-forget write to Butterbase
 //
-//   1) In Claude Code, with the Butterbase MCP connected, say:
-//      "Create tables for students, colleges, school_activity, and
-//       portfolio_readiness, then replace the localStorage calls in
-//       src/lib/store.ts with Butterbase queries."
-//   2) Butterbase wires auth, the DB, RAG over college docs, and the model
-//      gateway used by api/source-college.
+// The app works with zero backend; Butterbase syncs data across devices.
 // ---------------------------------------------------------------------------
 
 import {
@@ -114,6 +112,89 @@ export function saveState(s: AppState) {
 export function resetState() {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(KEY);
+  window.localStorage.removeItem(USER_ID_KEY);
+}
+
+// ── User identity ────────────────────────────────────────────────────────────
+// No auth required for the demo: a UUID is generated on first visit and
+// persisted in localStorage. All Butterbase rows are scoped to this ID.
+
+const USER_ID_KEY = "beta.user_id.v1";
+
+export function getUserId(): string {
+  if (typeof window === "undefined") return "server";
+  let id = window.localStorage.getItem(USER_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    window.localStorage.setItem(USER_ID_KEY, id);
+  }
+  return id;
+}
+
+// ── Butterbase async sync ────────────────────────────────────────────────────
+
+export async function syncFromBB(userId: string): Promise<Partial<AppState> | null> {
+  try {
+    const [profRes, actRes] = await Promise.all([
+      fetch(`/api/db/profile?userId=${encodeURIComponent(userId)}`),
+      fetch(`/api/db/activity?userId=${encodeURIComponent(userId)}`),
+    ]);
+    const profJson = await profRes.json() as { data: null | {
+      profile: AppState["profile"];
+      portfolioIds: string[];
+      risk: AppState["risk"];
+      readiness: AppState["readiness"];
+      onboarded: boolean;
+    }};
+    const actJson = await actRes.json() as { data: { collegeId: string; [k: string]: unknown }[] };
+
+    if (!profJson.data) return null;
+
+    const activity: AppState["activity"] = {};
+    for (const a of (actJson.data ?? [])) {
+      activity[a.collegeId] = a as unknown as AppState["activity"][string];
+    }
+
+    return {
+      profile:      profJson.data.profile,
+      portfolioIds: profJson.data.portfolioIds,
+      risk:         profJson.data.risk,
+      readiness:    profJson.data.readiness,
+      onboarded:    profJson.data.onboarded,
+      ...(Object.keys(activity).length > 0 ? { activity } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function syncToBB(userId: string, s: AppState): Promise<void> {
+  try {
+    await Promise.all([
+      fetch("/api/db/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          profile:      s.profile,
+          portfolioIds: s.portfolioIds,
+          risk:         s.risk,
+          readiness:    s.readiness,
+          onboarded:    s.onboarded,
+        }),
+      }),
+      // Sync activity entries that changed (fire all in parallel)
+      ...Object.values(s.activity).map((activity) =>
+        fetch("/api/db/activity", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, activity }),
+        })
+      ),
+    ]);
+  } catch {
+    // Fire-and-forget — never block the UI
+  }
 }
 
 export { blankActivity };

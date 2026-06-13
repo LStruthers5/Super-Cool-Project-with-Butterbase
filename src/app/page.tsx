@@ -6,65 +6,39 @@ import { useApp } from "@/lib/app-context";
 import {
   computeBeta,
   schoolEnrichment,
-  portfolioEnrichment,
   nextSchoolAction,
   type BetaResult,
 } from "@/lib/beta";
 import { getUniverse } from "@/lib/catalog";
-import { recommend, balancedStarter } from "@/lib/recommend";
+import { recommend, balancedStarter, riskPriority, priorityLabel } from "@/lib/recommend";
 import { blankActivity } from "@/lib/store";
 import { BetaBadge } from "@/components/BetaBadge";
-import { EnrichmentBar } from "@/components/EnrichmentBar";
 import { RiskControls } from "@/components/RiskControls";
 import { RecommendationCard } from "@/components/RecommendationCard";
 import { SchoolSearch } from "@/components/SchoolSearch";
-import { AlphaInbox } from "@/components/alpha/AlphaInbox";
-import {
-  SEED_ALPHA_LEADS,
-  totalAlphaImpact,
-  type AlphaLead,
-  type AlphaLeadStatus,
-} from "@/components/alpha/alpha-data";
 
-type SortKey = "beta" | "enrichment" | "fit";
+type SortKey = "priority" | "beta" | "admit" | "fit";
 
 const MAX_RECS = 8;
 
-// Application-strength levels — the gamified spine of the dashboard.
-const LEVELS = [
-  { min: 0, name: "Explorer" },
-  { min: 20, name: "Researcher" },
-  { min: 40, name: "Strategist" },
-  { min: 60, name: "Contender" },
-  { min: 80, name: "Front-runner" },
-];
-
-function levelFor(strength: number) {
-  let idx = 0;
-  for (let i = 0; i < LEVELS.length; i++) if (strength >= LEVELS[i].min) idx = i;
-  const cur = LEVELS[idx];
-  const next = LEVELS[idx + 1];
-  const span = (next ? next.min : 100) - cur.min;
-  const into = strength - cur.min;
-  const pct = Math.round((into / span) * 100);
-  return { level: idx + 1, name: cur.name, pct: Math.min(100, pct), next: next?.name };
-}
+const BUCKET_META: Record<
+  BetaResult["bucket"],
+  { color: string; range: string; desc: string }
+> = {
+  Safety:    { color: "#0FA47F", range: "β < 0.6",    desc: "Likely admit, strong fit — anchors your portfolio." },
+  Target:    { color: "#E6A23C", range: "β 0.6–1.4",  desc: "Balanced risk and reward. Demonstrated interest moves the needle most." },
+  Reach:     { color: "#E0533D", range: "β > 1.4",    desc: "Ambitious, but the fit justifies the swing." },
+  Reconsider:{ color: "#9AA0B4", range: "high β, low fit", desc: "High risk and soft fit — spend this application somewhere better." },
+};
 
 export default function Dashboard() {
   const { state, toggleReadiness, confirmToPortfolio, removeFromPortfolio, setRisk } = useApp();
-  const [sort, setSort] = useState<SortKey>("beta");
-
-  // Alpha Leads live in local UI state (frontend-only until Codex's backend
-  // feeds them). Progress + next-actions derive from these.
-  const [leads, setLeads] = useState<AlphaLead[]>(SEED_ALPHA_LEADS);
-  const setLeadStatus = (id: string, status: AlphaLeadStatus) =>
-    setLeads((ls) => ls.map((l) => (l.id === id ? { ...l, status } : l)));
-  const convertedPoints = leads.filter((l) => l.status === "converted").reduce((s, l) => s + l.impact, 0);
-  const acceptedLeads = leads.filter((l) => l.status === "accepted");
+  const [sort, setSort] = useState<SortKey>("priority");
 
   const universe = useMemo(() => (state ? getUniverse(state.colleges) : []), [state]);
 
-  // Confirmed "true" portfolio rows.
+  // Each confirmed school carries a live priority derived from the risk dial —
+  // recomputes the instant the student drags risk appetite.
   const rows = useMemo(() => {
     if (!state) return [];
     const confirmed = new Set(state.portfolioIds);
@@ -73,20 +47,17 @@ export default function Dashboard() {
       .map((c) => {
         const result = computeBeta(c, state.profile);
         const enr = schoolEnrichment(state.activity[c.id] ?? blankActivity(c.id));
-        return { college: c, result, enr, next: nextSchoolAction(state.activity[c.id] ?? blankActivity(c.id)) };
+        const priority = riskPriority(result.beta, result.fit, state.risk.tolerance);
+        return {
+          college: c,
+          result,
+          enr,
+          priority,
+          next: nextSchoolAction(state.activity[c.id] ?? blankActivity(c.id)),
+        };
       });
   }, [state, universe]);
 
-  const portfolio = useMemo(() => {
-    if (!state) return 0;
-    return portfolioEnrichment(
-      rows.map((r) => r.enr),
-      state.readiness,
-      rows.map((r) => r.result.bucket)
-    );
-  }, [rows, state]);
-
-  // Ranked recommendations from the catalog, driven by the risk dials.
   const recs = useMemo(() => {
     if (!state) return [];
     return recommend(universe, state.profile, state.portfolioIds, state.risk);
@@ -98,122 +69,207 @@ export default function Dashboard() {
     return universe.filter((c) => !confirmed.has(c.id));
   }, [state, universe]);
 
+  // Portfolio-level risk metrics — the core thesis
+  const riskMetrics = useMemo(() => {
+    if (!rows.length) return null;
+    const buckets: Record<BetaResult["bucket"], number> = { Safety: 0, Target: 0, Reach: 0, Reconsider: 0 };
+    let sumBeta = 0, sumAdmit = 0, sumFit = 0;
+    rows.forEach((r) => {
+      buckets[r.result.bucket]++;
+      sumBeta  += r.result.beta;
+      sumAdmit += r.result.admit;
+      sumFit   += r.result.fit;
+    });
+    const n = rows.length;
+    return { buckets, avgBeta: sumBeta / n, avgAdmit: sumAdmit / n, avgFit: sumFit / n };
+  }, [rows]);
+
   if (!state) return <div className="p-10 text-muted">Loading your portfolio…</div>;
 
   const sorted = [...rows].sort((a, b) => {
-    if (sort === "beta") return a.result.beta - b.result.beta;
-    if (sort === "fit") return b.result.fit - a.result.fit;
-    return b.enr - a.enr;
+    if (sort === "priority") return b.priority    - a.priority;
+    if (sort === "beta")     return a.result.beta - b.result.beta;
+    if (sort === "admit")    return b.result.admit - a.result.admit;
+    return b.result.fit - a.result.fit;
   });
 
-  const buildBalanced = () => balancedStarter(recs, state.risk.targetCount).forEach((r) => confirmToPortfolio(r.college));
+  const buildBalanced = () =>
+    balancedStarter(recs, state.risk.targetCount).forEach((r) => confirmToPortfolio(r.college));
   const gap = state.risk.targetCount - rows.length;
-
-  // Application Strength = the gamified composite: how ready your set is,
-  // how much Alpha upside you've captured, and how close to your target size.
-  const alphaPct = (convertedPoints / Math.max(1, totalAlphaImpact(leads))) * 100;
-  const coveragePct = Math.min(1, rows.length / Math.max(1, state.risk.targetCount)) * 100;
-  const strength = Math.round(0.6 * portfolio + 0.25 * alphaPct + 0.15 * coveragePct);
-  const lvl = levelFor(strength);
-
-  // Next best actions: highest-impact things to do right now.
-  const nextActions = [
-    ...acceptedLeads.map((l) => ({
-      id: l.id,
-      label: l.title,
-      context: l.school ? `Alpha · ${l.school}` : "Alpha",
-      impact: l.impact,
-      do: () => setLeadStatus(l.id, "converted"),
-      doLabel: "Mark done",
-    })),
-    ...sorted
-      .filter((r) => r.enr < 100)
-      .map((r) => ({
-        id: `school-${r.college.id}`,
-        label: r.next,
-        context: `β · ${r.college.short}`,
-        impact: Math.max(4, Math.round((100 - r.enr) / 8)),
-        href: `/college/${r.college.id}`,
-      })),
-  ]
-    .sort((a, b) => b.impact - a.impact)
-    .slice(0, 4);
 
   return (
     <div className="px-8 py-7 max-w-5xl">
+
       {/* Header */}
       <div className="flex items-end justify-between flex-wrap gap-4 mb-6">
         <div>
-          <p className="text-xs uppercase tracking-widest text-muted font-semibold mb-1">Your portfolio</p>
+          <p className="text-xs uppercase tracking-widest text-muted font-semibold mb-1">College portfolio</p>
           <h1 className="font-display text-3xl font-bold tracking-tight">
-            {state.profile.name === "You" ? "Your" : `${state.profile.name}'s`} college portfolio
+            {state.profile.name && state.profile.name !== "You"
+              ? `${state.profile.name}'s portfolio`
+              : "Your portfolio"}
           </h1>
         </div>
         <div className="flex gap-2 text-sm">
-          {(["beta", "enrichment", "fit"] as SortKey[]).map((k) => (
+          {(["priority", "beta", "admit", "fit"] as SortKey[]).map((k) => (
             <button
               key={k}
               onClick={() => setSort(k)}
-              className={`rounded-lg px-3 py-1.5 font-medium capitalize transition-colors ${
+              className={`rounded-lg px-3 py-1.5 font-medium transition-colors ${
                 sort === k ? "bg-ink text-white" : "bg-card border border-hair text-muted hover:text-ink"
               }`}
             >
-              Sort: {k === "beta" ? "β" : k}
+              {k === "priority" ? "Sort: priority" : k === "beta" ? "Sort: β" : k === "admit" ? "Sort: odds" : "Sort: fit"}
             </button>
           ))}
         </div>
       </div>
 
-      {/* College chips */}
-      <div className="flex flex-wrap gap-2 mb-4">
+      {/* School chips — beta-colored so risk is legible at a glance */}
+      <div className="flex flex-wrap gap-2 mb-6">
         {rows.length === 0 && <span className="text-sm text-muted">No schools yet — add some below.</span>}
         {rows.map((r) => (
           <Link
             key={r.college.id}
             href={`/college/${r.college.id}`}
-            className="rounded-lg border border-hair bg-card px-3 py-1.5 text-sm font-display font-semibold hover:border-ink transition-colors"
+            className="flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-display font-semibold hover:opacity-80 transition-opacity"
+            style={{ borderColor: BUCKET_META[r.result.bucket].color }}
           >
+            <span
+              className="font-mono text-[11px] font-bold"
+              style={{ color: BUCKET_META[r.result.bucket].color }}
+            >
+              β{r.result.beta.toFixed(1)}
+            </span>
             {r.college.short}
           </Link>
         ))}
       </div>
 
-      {/* Application Strength — gamified hero */}
-      <div className="rounded-2xl border border-hair bg-ink text-white shadow-card p-5 mb-5">
-        <div className="flex items-end justify-between gap-4 flex-wrap mb-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-widest text-white/50 font-semibold">Application strength</p>
-            <div className="flex items-baseline gap-2">
-              <span className="font-display text-3xl font-bold">Lvl {lvl.level}</span>
-              <span className="font-display text-lg font-semibold text-fit">{lvl.name}</span>
+      {/* ── Portfolio Beta Profile ─────────────────────────────────────────── */}
+      {riskMetrics ? (
+        <div className="rounded-2xl border border-hair bg-ink text-white shadow-card p-6 mb-5">
+          <p className="text-[11px] uppercase tracking-widest text-white/50 font-semibold mb-1">
+            Portfolio beta profile
+          </p>
+          <p className="text-sm text-white/60 mb-5 max-w-xl">
+            β = risk ÷ fit. A well-structured portfolio holds low-β anchors, mid-β targets, and
+            high-β reaches only where the fit is real.
+          </p>
+
+          {/* Key stats */}
+          <div className="flex gap-8 mb-5">
+            <div>
+              <div className="font-mono text-3xl font-bold tabular leading-none">
+                {riskMetrics.avgBeta.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-white/50 uppercase tracking-wider mt-0.5">avg β</div>
+            </div>
+            <div>
+              <div className="font-mono text-3xl font-bold tabular leading-none text-amber">
+                {Math.round(riskMetrics.avgAdmit * 100)}%
+              </div>
+              <div className="text-[11px] text-white/50 uppercase tracking-wider mt-0.5">avg admit odds</div>
+            </div>
+            <div>
+              <div className="font-mono text-3xl font-bold tabular leading-none text-fit">
+                {Math.round(riskMetrics.avgFit * 100)}%
+              </div>
+              <div className="text-[11px] text-white/50 uppercase tracking-wider mt-0.5">avg fit</div>
             </div>
           </div>
-          <div className="text-right">
-            <div className="font-mono text-3xl font-bold tabular leading-none">{strength}</div>
-            <div className="text-[11px] text-white/50">/ 100 overall</div>
+
+          {/* Allocation bar */}
+          <div className="flex h-10 rounded-xl overflow-hidden gap-0.5 mb-4">
+            {(["Safety", "Target", "Reach", "Reconsider"] as const).map((b) => {
+              const count = riskMetrics.buckets[b];
+              if (!count) return null;
+              const pct = (count / rows.length) * 100;
+              return (
+                <div
+                  key={b}
+                  style={{ width: `${pct}%`, backgroundColor: BUCKET_META[b].color }}
+                  className="flex items-center justify-center text-white text-sm font-bold font-mono"
+                  title={`${b}: ${count} school${count !== 1 ? "s" : ""}`}
+                >
+                  {count}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Bucket legend */}
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {(["Safety", "Target", "Reach", "Reconsider"] as const).map((b) => (
+              <div key={b} className="flex items-start gap-2">
+                <div
+                  className="mt-0.5 w-2.5 h-2.5 rounded-sm shrink-0"
+                  style={{ backgroundColor: BUCKET_META[b].color }}
+                />
+                <div className="text-[11px] text-white/60 leading-snug">
+                  <span className="font-semibold text-white">{b}</span>
+                  <span className="font-mono ml-1 text-white/40">{BUCKET_META[b].range}</span>
+                  <span className="ml-1 font-mono font-bold" style={{ color: BUCKET_META[b].color }}>
+                    ×{riskMetrics.buckets[b]}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-        {/* XP bar to next level */}
-        <div className="relative w-full h-3 rounded-full bg-white/15 overflow-hidden">
-          <div
-            className="h-full rounded-full bg-fit transition-[width] duration-700 ease-out"
-            style={{ width: `${lvl.pct}%` }}
-          />
+      ) : (
+        <div className="rounded-2xl border border-hair bg-card shadow-card p-6 mb-5 text-center text-sm text-muted">
+          Add schools below to see your portfolio beta profile.
         </div>
-        <p className="text-[11px] text-white/60 mt-1.5">
-          {lvl.next ? `${lvl.pct}% to ${lvl.next}` : "Maxed out — front-runner status."} · capture Alpha leads and
-          de-risk schools to level up.
-        </p>
+      )}
+
+      {/* ── Portfolio strategy (risk dials) ────────────────────────────────── */}
+      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-5">
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-display font-semibold">Portfolio strategy</span>
+          <span className="text-xs text-muted">risk appetite live-rates every school&apos;s priority</span>
+        </div>
+        <RiskControls risk={state.risk} onChange={setRisk} />
       </div>
 
-      {/* Readiness checklist */}
-      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-5">
-        <div className="flex items-center justify-between mb-2">
-          <span className="font-display font-semibold">Portfolio readiness</span>
-          <span className="text-xs text-muted">how de-risked your whole set is</span>
+      {/* ── School rows ────────────────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-hair bg-card shadow-card overflow-hidden mb-6">
+        <div className="grid grid-cols-[1fr_88px_72px_72px_72px_32px] gap-4 px-5 py-3 border-b border-hair text-[11px] uppercase tracking-wider text-muted font-semibold">
+          <span>School</span>
+          <span className="text-right">Priority</span>
+          <span className="text-right">Odds</span>
+          <span className="text-right">Fit</span>
+          <span className="text-right pr-2">β</span>
+          <span />
         </div>
-        <EnrichmentBar value={portfolio} height={28} />
-        <div className="flex flex-wrap gap-3 mt-4">
+        {sorted.length === 0 ? (
+          <div className="px-5 py-8 text-center text-sm text-muted">
+            Build your portfolio from the recommendations below.
+          </div>
+        ) : (
+          sorted.map((r) => (
+            <Row
+              key={r.college.id}
+              id={r.college.id}
+              short={r.college.short}
+              name={r.college.name}
+              loc={r.college.location}
+              next={r.next}
+              result={r.result}
+              priority={r.priority}
+              onRemove={() => removeFromPortfolio(r.college.id)}
+            />
+          ))
+        )}
+      </div>
+
+      {/* ── Application readiness ──────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-10">
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-display font-semibold">Application readiness</span>
+          <span className="text-xs text-muted">global de-riskers that lift every school</span>
+        </div>
+        <div className="flex flex-wrap gap-3">
           {(
             [
               ["commonAppDone", "Common App"],
@@ -238,95 +294,22 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Next best actions */}
-      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-5">
-        <div className="flex items-center justify-between mb-3">
-          <span className="font-display font-semibold">Next best actions</span>
-          <span className="text-xs text-muted">highest-impact moves right now</span>
-        </div>
-        {nextActions.length === 0 ? (
-          <p className="text-sm text-muted">You&apos;re all caught up. Source more Alpha leads to keep climbing.</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {nextActions.map((a) => (
-              <div key={a.id} className="flex items-center gap-3 rounded-xl border border-hair px-3 py-2.5">
-                <span className="font-mono text-xs font-bold text-fit tabular shrink-0">+{a.impact}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold truncate">{a.label}</p>
-                  <p className="text-[11px] text-muted">{a.context}</p>
-                </div>
-                {"do" in a && a.do ? (
-                  <button
-                    onClick={a.do}
-                    className="shrink-0 rounded-lg bg-fit text-white px-3 py-1 text-xs font-semibold hover:opacity-90 transition-colors"
-                  >
-                    {a.doLabel}
-                  </button>
-                ) : (
-                  <Link
-                    href={(a as { href: string }).href}
-                    className="shrink-0 rounded-lg border border-ink text-ink px-3 py-1 text-xs font-semibold hover:bg-ink hover:text-white transition-colors"
-                  >
-                    Open
-                  </Link>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Alpha Inbox */}
-      <div className="mb-8">
-        <AlphaInbox leads={leads} onSetStatus={setLeadStatus} />
-      </div>
-
-      {/* Confirmed school rows */}
-      <div className="rounded-2xl border border-hair bg-card shadow-card overflow-hidden mb-10">
-        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-3 border-b border-hair text-[11px] uppercase tracking-wider text-muted font-semibold">
-          <span>School</span>
-          <span className="text-right">Enrichment</span>
-          <span className="text-right pr-2">β</span>
-          <span className="sr-only">Remove</span>
-        </div>
-        {sorted.length === 0 ? (
-          <div className="px-5 py-8 text-center text-sm text-muted">
-            Build your portfolio from the recommendations below.
-          </div>
-        ) : (
-          sorted.map((r) => (
-            <Row
-              key={r.college.id}
-              id={r.college.id}
-              short={r.college.short}
-              name={r.college.name}
-              loc={r.college.location}
-              enr={r.enr}
-              next={r.next}
-              result={r.result}
-              onRemove={() => removeFromPortfolio(r.college.id)}
-            />
-          ))
-        )}
-      </div>
-
-      {/* ---- Recommendations -------------------------------------------- */}
+      {/* ── Add to portfolio ───────────────────────────────────────────────── */}
       <div className="flex items-end justify-between flex-wrap gap-3 mb-1">
-        <h2 className="font-display text-2xl font-bold tracking-tight">Recommended for you</h2>
+        <h2 className="font-display text-2xl font-bold tracking-tight">Add to your portfolio</h2>
         <button
           onClick={buildBalanced}
           className="rounded-xl border border-ink bg-card px-4 py-2 text-sm font-display font-semibold text-ink hover:bg-ink hover:text-white transition-colors"
         >
-          Build a balanced list ({state.risk.targetCount})
+          Build balanced ({state.risk.targetCount})
         </button>
       </div>
       <p className="text-sm text-muted mb-4 max-w-2xl">
-        Tuned to your risk appetite. {gap > 0 ? `You're ${gap} short of your ${state.risk.targetCount}-school target.` : "You've hit your target — anything below is upside."}
+        Ranked by your risk appetite.{" "}
+        {gap > 0
+          ? `You're ${gap} short of your ${state.risk.targetCount}-school target.`
+          : "You've hit your target — anything below is upside."}
       </p>
-
-      <div className="rounded-2xl border border-hair bg-card shadow-card p-5 mb-5">
-        <RiskControls risk={state.risk} onChange={setRisk} />
-      </div>
 
       <div className="mb-4">
         <SchoolSearch candidates={candidates} onAdd={confirmToPortfolio} />
@@ -334,7 +317,7 @@ export default function Dashboard() {
 
       <div className="flex flex-col gap-3">
         {recs.length === 0 ? (
-          <p className="text-sm text-muted">You've added every school in the catalog. 🎉</p>
+          <p className="text-sm text-muted">You've added every school in the catalog.</p>
         ) : (
           recs
             .slice(0, MAX_RECS)
@@ -345,8 +328,9 @@ export default function Dashboard() {
       </div>
 
       <p className="mt-6 text-xs text-muted leading-relaxed max-w-2xl">
-        <span className="font-mono font-bold text-ink">β = college risk ÷ fit.</span> Lower β anchors your portfolio;
-        higher β is a reach whose upside has to justify the risk. Recommendations re-rank live as you move the dials.
+        <span className="font-mono font-bold text-ink">β = risk ÷ fit.</span> Risk is your personal rejection
+        probability at this school. Fit is how well it matches your preferences. Low β anchors the portfolio;
+        high β is only worth it when the fit is real. Recommendations re-rank live as you move the dials.
       </p>
     </div>
   );
@@ -357,22 +341,24 @@ function Row({
   short,
   name,
   loc,
-  enr,
   next,
   result,
+  priority,
   onRemove,
 }: {
   id: string;
   short: string;
   name: string;
   loc: string;
-  enr: number;
   next: string;
   result: BetaResult;
+  priority: number;
   onRemove: () => void;
 }) {
+  const pLabel = priorityLabel(priority);
+  const pColor = pLabel === "High" ? "#0FA47F" : pLabel === "Medium" ? "#E6A23C" : "#9AA0B4";
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-5 py-4 border-b border-hair last:border-0 hover:bg-slatebg transition-colors">
+    <div className="grid grid-cols-[1fr_88px_72px_72px_72px_32px] items-center gap-4 px-5 py-4 border-b border-hair last:border-0 hover:bg-slatebg transition-colors">
       <Link href={`/college/${id}`} className="min-w-0">
         <div className="flex items-baseline gap-2">
           <span className="font-display font-bold">{name}</span>
@@ -382,16 +368,33 @@ function Row({
           Next: <span className="text-ink">{next}</span>
         </div>
       </Link>
-      <Link href={`/college/${id}`} className="w-40">
-        <EnrichmentBar value={enr} height={22} tone={enr >= 100 ? "fit" : "amber"} />
+      <div className="flex justify-end">
+        <span
+          className="rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide"
+          style={{ color: pColor, backgroundColor: `${pColor}1A` }}
+          title="Priority is driven by your risk appetite — drag the dial to re-rank"
+        >
+          {pLabel}
+        </span>
+      </div>
+      <Link href={`/college/${id}`} className="text-right">
+        <div className="font-mono font-bold tabular" style={{ color: "#E6A23C" }}>
+          {Math.round(result.admit * 100)}%
+        </div>
+        <div className="text-[10px] text-muted">your odds</div>
       </Link>
-      <Link href={`/college/${id}`} className="pr-1">
-        <BetaBadge result={result} size={56} />
+      <Link href={`/college/${id}`} className="text-right">
+        <div className="font-mono font-bold tabular text-fit">
+          {Math.round(result.fit * 100)}%
+        </div>
+        <div className="text-[10px] text-muted">fit</div>
+      </Link>
+      <Link href={`/college/${id}`} className="flex justify-end pr-1">
+        <BetaBadge result={result} size={64} />
       </Link>
       <button
         onClick={onRemove}
         aria-label={`Remove ${short} from portfolio`}
-        title="Remove from portfolio"
         className="grid place-items-center h-7 w-7 rounded-lg border border-hair text-muted hover:border-risk hover:text-risk transition-colors"
       >
         ✕

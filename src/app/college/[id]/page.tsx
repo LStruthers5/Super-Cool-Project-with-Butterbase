@@ -7,7 +7,7 @@ import { computeBeta, schoolEnrichment } from "@/lib/beta";
 import type { BetaResult } from "@/lib/beta";
 import { BetaBadge } from "@/components/BetaBadge";
 import { EnrichmentBar } from "@/components/EnrichmentBar";
-import type { College, SchoolActivity, StudentProfile } from "@/lib/data";
+import type { College, SchoolActivity, StudentProfile, SchoolCulture } from "@/lib/data";
 
 const ACTIVITY_LABELS: [keyof Omit<SchoolActivity, "collegeId">, string][] = [
   ["visitedInPerson", "Visited in person"],
@@ -20,17 +20,10 @@ const ACTIVITY_LABELS: [keyof Omit<SchoolActivity, "collegeId">, string][] = [
 ];
 
 // ---- School fit profiles -------------------------------------------------------
+// Hand-authored culture profiles for the seed schools. Any other school gets its
+// culture from the sourcing agent (stored on college.culture) — see PersonalFitSection.
 
-interface SchoolFitProfile {
-  whatTheyValue: string[];
-  classesStudentsLove: string[];
-  vibe: string;
-  traditions: string[];
-  opportunities: string[];
-  watchOut: string;
-}
-
-const SCHOOL_FIT_PROFILES: Record<string, SchoolFitProfile> = {
+const SCHOOL_FIT_PROFILES: Record<string, SchoolCulture> = {
   ucla: {
     whatTheyValue: [
       "Public service and civic responsibility as core to the Bruin identity",
@@ -594,14 +587,22 @@ export default function CollegePage({ params }: { params: { id: string } }) {
         body: JSON.stringify({ name: college!.name, location: college!.location }),
       });
       const data = await res.json();
-      setSourceLog((l) => [...l, "Exa cross-check: verifying facts against second source…", data.verified ? "✓ Double-verified." : "⚠ Could not fully verify — showing best estimate."]);
-      upsertCollege({
+      setSourceLog((l) => [...l, "Exa cross-check: verifying facts against second source…", data.culture ? "Enriching school-culture profile…" : "", data.verified ? "✓ Double-verified." : "⚠ Could not fully verify — showing best estimate."].filter(Boolean));
+      const enriched: College = {
         ...college!,
         values: data.values,
         whyEssayAngle: data.whyEssayAngle,
         tourUrl: data.tourUrl,
         verified: data.verified,
-      });
+        culture: data.culture ?? college!.culture,
+      };
+      upsertCollege(enriched);
+      // Persist the enriched college (incl. culture) to Butterbase
+      fetch("/api/db/colleges", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ college: enriched }),
+      }).catch(() => {});
     } catch {
       setSourceLog((l) => [...l, "Agent unavailable — connect Butterbase model gateway in api/source-college."]);
     } finally {
@@ -874,7 +875,9 @@ function PersonalFitSection({
   result: BetaResult;
   onboarded: boolean;
 }) {
-  const fitProfile = SCHOOL_FIT_PROFILES[college.id] ?? null;
+  // Seed schools use the hand-authored profile; everything else uses the
+  // agent-sourced culture stored on the college (run the sourcing agent to fill).
+  const fitProfile = SCHOOL_FIT_PROFILES[college.id] ?? college.culture ?? null;
   const breakdown = buildFitBreakdown(college, profile, result, onboarded);
   const summary = generateFitSummary(college, profile, result, onboarded);
 

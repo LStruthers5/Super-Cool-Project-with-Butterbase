@@ -101,9 +101,7 @@ function LeadRow({
         isNew ? "bg-card" : isConverted ? "bg-fitsoft/40" : "bg-slatebg/40"
       }`}
     >
-      <div className={`shrink-0 grid place-items-center h-9 w-9 rounded-xl text-lg ${meta.bg}`}>
-        <span>{meta.icon}</span>
-      </div>
+      <div className={`shrink-0 mt-[18px] h-2 w-2 rounded-full ${meta.dot}`} />
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">

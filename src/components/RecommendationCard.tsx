@@ -25,17 +25,27 @@ export function RecommendationCard({
           <span className="text-xs text-muted">{college.location}</span>
           {discovery && (
             <span className="text-[10px] uppercase tracking-wider font-bold text-fit bg-fitsoft px-2 py-0.5 rounded">
-              On your radar?
+              Off your radar
             </span>
           )}
         </div>
         <p className="text-xs text-muted mt-0.5">{why}</p>
-        <div className="flex gap-3 mt-1 text-[11px] text-muted">
-          <span>
-            Fit <span className="font-mono font-bold text-fit">{Math.round(result.fit * 100)}%</span>
+        <div className="flex gap-4 mt-1.5 text-[11px]">
+          <span className="text-muted">
+            Your odds{" "}
+            <span className="font-mono font-bold" style={{ color: "#E6A23C" }}>
+              {Math.round(result.admit * 100)}%
+            </span>
           </span>
-          <span>
-            Your odds <span className="font-mono font-bold text-amber">{Math.round(result.admit * 100)}%</span>
+          <span className="text-muted">
+            Fit{" "}
+            <span className="font-mono font-bold text-fit">
+              {Math.round(result.fit * 100)}%
+            </span>
+          </span>
+          <span className="text-muted">
+            Bucket{" "}
+            <span className="font-semibold text-ink">{result.bucket}</span>
           </span>
         </div>
       </div>
